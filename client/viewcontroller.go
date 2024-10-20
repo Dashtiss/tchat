@@ -8,6 +8,9 @@ import (
 	"tchat/internal/protocol"
 	"tchat/internal/types"
 	"time"
+
+	"github.com/ProtonMail/gopenpgp/v3/crypto"
+	"github.com/ProtonMail/gopenpgp/v3/profile"
 )
 
 type viewController struct {
@@ -27,7 +30,7 @@ func newViewController(ctx *clientContext, renderTextCh chan []string, onChannel
 	}
 }
 
-func (r *viewController) onNewMessage(b []byte) {
+func (r *viewController) onNewMessage(b []byte, key *crypto.Key) {
 	copyB := make([]byte, len(b))
 	copy(copyB, b)
 	msg, err := message.RawFromBytes(copyB)
@@ -40,11 +43,11 @@ func (r *viewController) onNewMessage(b []byte) {
 		r.renderTextCh <- []string{fmt.Sprintf("invalid message type received: %s", msgType)}
 	}
 	if msgType.IsChannelMsg() {
-		r.renderChannelMessage(msgType, b)
+		r.renderChannelMessage(msgType, b, key)
 	}
 }
 
-func (r *viewController) renderChannelMessage(msgType message.Type, b []byte) {
+func (r *viewController) renderChannelMessage(msgType message.Type, b []byte, key *crypto.Key) {
 	switch msgType {
 	case message.TypeChannelsGetResponse:
 		c := protocol.ChannelsMessage{}
@@ -81,6 +84,23 @@ func (r *viewController) renderChannelMessage(msgType message.Type, b []byte) {
 		}
 		msg := types.Message{}
 		_ = json.Unmarshal(c.Payload, &msg)
+
+		pgp := crypto.PGPWithProfile(profile.RFC9580())
+
+		if crypto.IsPGPMessage(msg.Content) {
+			decHandle, err := pgp.Decryption().DecryptionKey(key).New()
+			if err != nil {
+				log.Fatal("Error: ", err.Error())
+			}
+			decrypted, err := decHandle.Decrypt([]byte(msg.Content), crypto.Armor)
+			if err != nil {
+				log.Fatal("Error: ", err.Error())
+			}
+
+			msg.Content = decrypted.String()
+
+		}
+
 		r.renderTextCh <- []string{fmt.Sprintf("%s %s:    %s", getTimeString(msg.CreatedAt), msg.UserID, msg.Content)}
 	case message.TypeChannelsCreateResponse:
 		r.renderTextCh <- []string{"channel created successfully. You're the admin and you can join it with /channel join <channelname> and then follow the instructions to configure it"}

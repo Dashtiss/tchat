@@ -3,6 +3,7 @@ package client
 import (
 	"errors"
 	"fmt"
+	"log"
 	"strings"
 	"tchat/internal/message"
 	"tchat/internal/parsing"
@@ -10,14 +11,17 @@ import (
 	"tchat/internal/types"
 	"tchat/internal/validation"
 	"time"
+
+	"github.com/ProtonMail/gopenpgp/v3/crypto"
+	"github.com/ProtonMail/gopenpgp/v3/profile"
 )
 
-func ParseFromInput(ctx *clientContext, userID, input string) (protocol.SerializableMessage, error) {
+func ParseFromInput(ctx *clientContext, userID, input string, pubkey *crypto.Key) (protocol.SerializableMessage, error) {
 	input = strings.ReplaceAll(input, "\n", "")
 	parsedInput := strings.Split(input, " ")
 	msgType := parsedInput[0]
 	if ctx.currentChannel != nil {
-		return parseChannelInput(ctx, userID, input, msgType)
+		return parseChannelInput(ctx, userID, input, msgType, pubkey)
 	}
 	switch msgType {
 	case "/exit":
@@ -53,15 +57,43 @@ func ParseFromInput(ctx *clientContext, userID, input string) (protocol.Serializ
 	}
 }
 
-func parseChannelInput(ctx *clientContext, userID, input string, msgType string) (protocol.SerializableMessage, error) {
+func parseChannelInput(ctx *clientContext, userID, input string, msgType string, pubkey *crypto.Key) (protocol.SerializableMessage, error) {
 	switch msgType {
 	case "/message":
 		msgWithoutPrefix := strings.TrimPrefix(input, "/message ")
+
+		pgp := crypto.PGPWithProfile(profile.RFC9580())
+
+		recipients, err := crypto.NewKeyRing(pubkey)
+		//err = recipients.AddKey(key)
+
+		if err != nil {
+			log.Fatal("Error: ", err.Error())
+		}
+
+		encHandle, err := pgp.Encryption().Recipients(recipients).New()
+
+		if err != nil {
+			log.Fatal("Error: ", err.Error())
+		}
+
+		encMsg, err := encHandle.Encrypt([]byte(msgWithoutPrefix))
+
+		if err != nil {
+			log.Fatal("Error: ", err.Error())
+		}
+
+		armoredMsg, err := encMsg.Armor()
+
+		if err != nil {
+			log.Fatal("Error: ", err.Error())
+		}
+
 		b := types.Message{
 			UserID:      userID,
 			Channel:     ctx.currentChannel.Name,
 			DisplayName: userID,
-			Content:     msgWithoutPrefix,
+			Content:     armoredMsg,
 			CreatedAt:   time.Now(),
 		}.MustJSON()
 

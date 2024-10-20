@@ -3,7 +3,6 @@ package client
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/google/uuid"
 	"log"
 	"net"
 	"os"
@@ -11,6 +10,11 @@ import (
 	"tchat/internal/message"
 	"tchat/internal/protocol"
 	types2 "tchat/internal/types"
+
+	"github.com/ProtonMail/gopenpgp/v3/constants"
+	"github.com/ProtonMail/gopenpgp/v3/crypto"
+	"github.com/ProtonMail/gopenpgp/v3/profile"
+	"github.com/google/uuid"
 )
 
 func init() {
@@ -28,6 +32,9 @@ type Client struct {
 	renderTextChan  chan []string
 
 	exitCh chan struct{}
+
+	privKey *crypto.Key
+	pubKey  *crypto.Key
 }
 
 func New(conn net.Conn) *Client {
@@ -42,6 +49,21 @@ func New(conn net.Conn) *Client {
 	renderer := newViewController(ctx, renderTextCh, channelsJoinedCh, exitChannelCh)
 	v.setUp()
 
+	pgp := crypto.PGPWithProfile(profile.RFC9580())
+	genHandle := pgp.KeyGeneration().
+		AddUserId(clientID, clientID+"@tchat.com").
+		New()
+	privkey, err := genHandle.GenerateKeyWithSecurity(constants.HighSecurity)
+	if err != nil {
+		log.Fatal("Error: ", err.Error())
+	}
+
+	pubkey, err := privkey.ToPublic()
+
+	if err != nil {
+		log.Fatal("Error: ", err.Error())
+	}
+
 	return &Client{
 		conn:            conn,
 		renderer:        renderer,
@@ -51,6 +73,8 @@ func New(conn net.Conn) *Client {
 		app:             v,
 		exitCh:          exitCh,
 		ctx:             ctx,
+		privKey:         privkey,
+		pubKey:          pubkey,
 	}
 }
 
@@ -93,7 +117,7 @@ func (c *Client) Run() {
 				c.renderTextChan <- []string{fmt.Sprintf("could not read message from server: %s", err.Error())}
 				continue
 			}
-			c.renderer.onNewMessage(b)
+			c.renderer.onNewMessage(b, c.privKey)
 		}
 	}()
 
@@ -104,7 +128,7 @@ func (c *Client) Run() {
 				c.renderTextChan <- []string{"Disconnected from server"}
 				os.Exit(0)
 			case msg := <-c.sendMessageChan:
-				m, err := ParseFromInput(c.ctx, c.id, string(msg))
+				m, err := ParseFromInput(c.ctx, c.id, string(msg), c.pubKey)
 				// check if m is instance of DisconnectMessage
 				if _, ok := m.(protocol.DisconnectMessage); ok {
 					c.exitCh <- struct{}{}
