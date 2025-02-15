@@ -29,24 +29,36 @@ func newViewController(ctx *clientContext, renderTextCh chan []string, onChannel
 		onChannelQuitCh: onChannelQuit,
 	}
 }
+func (r *viewController) onNewMessage(encryptedMessage []byte, privKey *crypto.Key) {
+    // Assuming the message contains the sender's ID and the encrypted message
+    var msg protocol.EncryptedMessage
+    if err := json.Unmarshal(encryptedMessage, &msg); err != nil {
+        r.renderTextChan <- []string{fmt.Sprintf("could not unmarshal message: %s", err.Error())}
+        return
+    }
 
-func (r *viewController) onNewMessage(b []byte, key *crypto.Key) {
-	copyB := make([]byte, len(b))
-	copy(copyB, b)
-	msg, err := message.RawFromBytes(copyB)
-	if err != nil {
-		r.renderTextCh <- []string{fmt.Errorf("could not unmarshal response: %s", err.Error()).Error()}
-		return
-	}
-	msgType := message.Type(msg["type"].(string))
-	if !msgType.IsValid() {
-		r.renderTextCh <- []string{fmt.Sprintf("invalid message type received: %s", msgType)}
-	}
-	if msgType.IsChannelMsg() {
-		r.renderChannelMessage(msgType, b, key)
-	}
+    // Retrieve the sender's public key (this part depends on your implementation)
+    senderPubKey, err := r.getSenderPublicKey(msg.SenderID)
+    if err != nil {
+        r.renderTextChan <- []string{fmt.Sprintf("could not retrieve sender's public key: %s", err.Error())}
+        return
+    }
+
+    // Decrypt the message
+    decryptedMessage, err := r.client.decryptMessage(msg.EncryptedContent, senderPubKey)
+    if err != nil {
+        r.renderTextChan <- []string{fmt.Sprintf("could not decrypt message: %s", err.Error())}
+        return
+    }
+
+    // Render the decrypted message
+    r.renderTextChan <- []string{fmt.Sprintf("Message from %s: %s", msg.SenderID, decryptedMessage)}
 }
-
+func (r *viewController) getSenderPublicKey(senderID string) (*crypto.Key, error) {
+    // Implement this method to retrieve the sender's public key
+    // This is just a placeholder implementation
+    return nil, fmt.Errorf("not implemented")
+}
 func (r *viewController) renderChannelMessage(msgType message.Type, b []byte, key *crypto.Key) {
 	switch msgType {
 	case message.TypeChannelsGetResponse:
